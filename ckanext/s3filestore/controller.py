@@ -63,6 +63,7 @@ class S3Controller(base.BaseController):
                 # We are using redirect to minio's resource public URL
                 s3 = upload.get_s3_session()
                 client = s3.client(service_name='s3', endpoint_url=host_name)
+                resource_object = client.get_object(Bucket=bucket.name, Key=key_path)
                 url = client.generate_presigned_url(ClientMethod='get_object',
                                                     Params={'Bucket': bucket.name,
                                                             'Key': key_path},
@@ -73,17 +74,12 @@ class S3Controller(base.BaseController):
                 if ex.response['Error']['Code'] == 'NoSuchKey':
                     # attempt fallback
                     if config.get(
-                            'ckanext.s3filestore.filesystem_download_fallback',
-                            False):
+                            'ckanext.s3filestore.resource_download_bucket_fallback',
+                            True):
                         log.info('Attempting filesystem fallback for resource {0}'
                                  .format(resource_id))
-                        url = toolkit.url_for(
-                            controller='ckanext.s3filestore.controller:S3Controller',
-                            action='filesystem_resource_download',
-                            id=id,
-                            resource_id=resource_id,
-                            filename=filename)
-                        redirect(url)
+
+                        self.resource_download_bucket_fallback(id, resource_id, filename)
 
                     abort(404, _('Resource data not found'))
                 else:
@@ -145,3 +141,67 @@ class S3Controller(base.BaseController):
                           filepath=filepath,
                           host_name=host_name)
         redirect(redirect_url)
+
+    def resource_download_bucket_fallback(self, id, resource_id, filename=None):
+        '''
+        Provide a download from s3 using resource directory structure /id[:3]/id[3:6]/id[6:]
+        '''
+        context = {'model': model, 'session': model.Session,
+                    'user': c.user or c.author, 'auth_user_obj': c.userobj}
+
+        try:
+            rsc = get_action('resource_show')(context, {'id': resource_id})
+            get_action('package_show')(context, {'id': id})
+        except NotFound:
+            abort(404, _('Resource not found'))
+        except NotAuthorized:
+            abort(401, _('Unauthorized to read resource %s') % id)
+
+        if rsc.get('url_type') == 'upload':
+            upload = uploader.get_resource_uploader(rsc)
+            bucket_name = config.get('ckanext.s3filestore.aws_bucket_name')
+            region = config.get('ckanext.s3filestore.region_name')
+            host_name = config.get('ckanext.s3filestore.host_name')
+            bucket = upload.get_s3_bucket(bucket_name)
+
+            if filename is None:
+                filename = os.path.basename(rsc['url'])
+            key_path = upload.get_path_fallback(rsc['id'])
+            key_path = config.get('ckanext.s3filestore.aws_stoage_path', 'ckan') +'/' +key_path
+            key = filename
+
+            if key is None:
+                log.warn('Key \'{0}\' not found in bucket \'{1}\''
+                            .format(key_path, bucket_name))
+
+            try:
+                # Small workaround to manage downloading of large files
+                # We are using redirect to minio's resource public URL
+                s3 = upload.get_s3_session()
+                client = s3.client(service_name='s3', endpoint_url=host_name)
+                resource_object = client.get_object(Bucket=bucket.name, Key=key_path)
+                url = client.generate_presigned_url(ClientMethod='get_object',
+                                                    Params={'Bucket': bucket.name,
+                                                            'Key': key_path},
+                                                    ExpiresIn=60)
+                redirect(url)
+
+            except ClientError as ex:
+                if ex.response['Error']['Code'] == 'NoSuchKey':
+                    # attempt fallback
+                    if config.get(
+                            'ckanext.s3filestore.filesystem_download_fallback',
+                            False):
+                        log.info('Attempting filesystem fallback for resource {0}'
+                                    .format(resource_id))
+                        url = toolkit.url_for(
+                            controller='ckanext.s3filestore.controller:S3Controller',
+                            action='filesystem_resource_download',
+                            id=id,
+                            resource_id=resource_id,
+                            filename=filename)
+                        redirect(url)
+
+                    abort(404, _('Resource data not found'))
+                else:
+                    raise ex

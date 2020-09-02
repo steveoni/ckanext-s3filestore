@@ -295,3 +295,13 @@ class S3ResourceUploader(BaseS3Uploader):
         if self.clear and self.old_filename:
             filepath = self.get_path(id, self.old_filename)
             self.clear_key(filepath)
+    
+    def get_directory_fallback(self, id):
+        directory = os.path.join(self.storage_path,
+                                    id[0:3], id[3:6])
+        return directory
+
+    def get_path_fallback(self, id):
+        directory = self.get_directory_fallback(id)
+        filepath = os.path.join(directory, id[6:])
+        return filepath
