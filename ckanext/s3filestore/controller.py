@@ -167,7 +167,6 @@ class S3Controller(base.BaseController):
             if filename is None:
                 filename = os.path.basename(rsc['url'])
             key_path = upload.get_path_fallback(rsc['id'])
-            key_path = config.get('ckanext.s3filestore.aws_stoage_path', 'ckan') +'/' +key_path
             key = filename
 
             if key is None:
@@ -179,6 +178,7 @@ class S3Controller(base.BaseController):
                 # We are using redirect to minio's resource public URL
                 s3 = upload.get_s3_session()
                 client = s3.client(service_name='s3', endpoint_url=host_name)
+                log.info(key_path)
                 resource_object = client.get_object(Bucket=bucket.name, Key=key_path)
                 url = client.generate_presigned_url(ClientMethod='get_object',
                                                     Params={'Bucket': bucket.name,
