@@ -131,7 +131,7 @@ class BaseS3Uploader(object):
         try:
             s3.Object(self.bucket_name, filepath).delete()
         except Exception as e:
-            raise e
+            log.error('Something went very very wrong for {0}'.format(str(e)))
 
 
 class S3Uploader(BaseS3Uploader):
