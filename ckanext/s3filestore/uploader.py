@@ -1,22 +1,26 @@
 import os
+import re
 import cgi
 import logging
 import datetime
 import mimetypes
+import magic
 
 import boto3
 import botocore
+from botocore.client import Config as BotoConfig
+from botocore.exceptions import ClientError
 import ckantoolkit as toolkit
-
 
 import ckan.model as model
 import ckan.lib.munge as munge
 
 if toolkit.check_ckan_version(min_version='2.7.0'):
     from werkzeug.datastructures import FileStorage as FlaskFileStorage
+
     ALLOWED_UPLOAD_TYPES = (cgi.FieldStorage, FlaskFileStorage)
 else:
-    ALLOWED_UPLOAD_TYPES = (cgi.FieldStorage)
+    ALLOWED_UPLOAD_TYPES = cgi.FieldStorage
 
 config = toolkit.config
 log = logging.getLogger(__name__)
@@ -24,6 +28,8 @@ log = logging.getLogger(__name__)
 _storage_path = None
 _max_resource_size = None
 _max_image_size = None
+
+URL_HOST = re.compile('^https?://[^/]*/')
 
 
 def _get_underlying_file(wrapper):
@@ -44,8 +50,14 @@ class BaseS3Uploader(object):
         self.s_key = config.get('ckanext.s3filestore.aws_secret_access_key')
         self.region = config.get('ckanext.s3filestore.region_name')
         self.signature = config.get('ckanext.s3filestore.signature_version')
-        self.host_name = config.get('ckanext.s3filestore.host_name')
-        self.bucket = self.get_s3_bucket(self.bucket_name)
+        self.host_name = config.get('ckanext.s3filestore.host_name', None)
+        self.download_proxy = \
+            config.get('ckanext.s3filestore.download_proxy', None)
+        self.acl = config.get('ckanext.s3filestore.acl', 'public-read')
+        self.addressing_style = \
+            config.get('ckanext.s3filestore.addressing_style', 'auto')
+        self.signed_url_expiry = \
+            int(config.get('ckanext.s3filestore.signed_url_expiry', '3600'))
 
     def get_directory(self, id, storage_path):
         directory = os.path.join(storage_path, id)
@@ -56,41 +68,48 @@ class BaseS3Uploader(object):
                                      aws_secret_access_key=self.s_key,
                                      region_name=self.region)
 
+    def get_s3_resource(self):
+        return \
+            self.get_s3_session()\
+                .resource('s3',
+                          endpoint_url=self.host_name,
+                          config=BotoConfig(
+                              signature_version=self.signature,
+                              s3={'addressing_style': self.addressing_style}))
+
+    def get_s3_client(self):
+        return \
+            self.get_s3_session()\
+                .client('s3',
+                        endpoint_url=self.host_name,
+                        config=BotoConfig(
+                            signature_version=self.signature,
+                            s3={'addressing_style': self.addressing_style}),
+                        region_name=self.region)
+
     def get_s3_bucket(self, bucket_name):
         '''Return a boto bucket, creating it if it doesn't exist.'''
 
         # make s3 connection using boto3
+        s3 = self.get_s3_resource()
 
-        s3 = self.get_s3_session().resource('s3', endpoint_url=self.host_name,
-                                            config=botocore.client.Config(
-                                             signature_version=self.signature))
         bucket = s3.Bucket(bucket_name)
         try:
-            if s3.Bucket(bucket.name) in s3.buckets.all():
-                log.info('Bucket {0} found!'.format(bucket_name))
-
-            else:
-                log.warning(
-                    'Bucket {0} could not be found,\
-                    attempting to create it...'.format(bucket_name))
-                try:
-                    bucket = s3.create_bucket(Bucket=bucket_name, CreateBucketConfiguration={
-                        'LocationConstraint': 'us-east-1'})
-                    log.info(
-                        'Bucket {0} succesfully created'.format(bucket_name))
-                except botocore.exceptions.ClientError as e:
-                    log.warning('Could not create bucket {0}: {1}'.format(
-                        bucket_name, str(e)))
+            s3.meta.client.head_bucket(Bucket=bucket_name)
+            log.debug('Bucket {0} found!'.format(bucket_name))
         except botocore.exceptions.ClientError as e:
             error_code = int(e.response['Error']['Code'])
             if error_code == 404:
-                log.warning('Bucket {0} could not be found, ' +
+                log.warning('Bucket {0} could not be found, '
                             'attempting to create it...'.format(bucket_name))
                 try:
-                    bucket = s3.create_bucket(Bucket=bucket_name, CreateBucketConfiguration={
-                        'LocationConstraint': self.region})
+                    bucket = \
+                        s3.create_bucket(Bucket=bucket_name,
+                                         CreateBucketConfiguration={
+                                             'LocationConstraint': self.region
+                                         })
                     log.info(
-                        'Bucket {0} succesfully created'.format(bucket_name))
+                        'Bucket {0} successfully created'.format(bucket_name))
                 except botocore.exceptions.ClientError as e:
                     log.warning('Could not create bucket {0}: {1}'.format(
                         bucket_name, str(e)))
@@ -105,37 +124,62 @@ class BaseS3Uploader(object):
 
     def upload_to_key(self, filepath, upload_file, make_public=False):
         '''Uploads the `upload_file` to `filepath` on `self.bucket`.'''
+
         upload_file.seek(0)
 
-        session = boto3.session.Session(aws_access_key_id=self.p_key,
-                                        aws_secret_access_key=self.s_key,
-                                        region_name=self.region)
-        s3 = session.resource('s3', endpoint_url=self.host_name,
-                              config=botocore.client.Config(signature_version=self.signature))
+        s3 = self.get_s3_resource()
+
         try:
             s3.Object(self.bucket_name, filepath).put(
-                Body=upload_file.read(), ACL='public-read',
-                ContentType=getattr(self, 'mimetype', '') or '')
-            log.info("Succesfully uploaded {0} to S3!".format(filepath))
+                Body=upload_file.read(),
+                ACL='public-read' if make_public else self.acl,
+                ContentType=getattr(self, 'mimetype', '') or 'text/plain')
+            log.info("Successfully uploaded {0} to S3!".format(filepath))
         except Exception as e:
             log.error('Something went very very wrong for {0}'.format(str(e)))
             raise e
 
     def clear_key(self, filepath):
         '''Deletes the contents of the key at `filepath` on `self.bucket`.'''
-        session = boto3.session.Session(aws_access_key_id=self.p_key,
-                                    aws_secret_access_key=self.s_key,
-                                    region_name=self.region)
-        s3 = session.resource('s3', endpoint_url=self.host_name, config=botocore.client.Config(
-                             signature_version=self.signature))
+
+        s3 = self.get_s3_resource()
+
         try:
             s3.Object(self.bucket_name, filepath).delete()
         except Exception as e:
             log.error('Something went very very wrong for {0}'.format(str(e)))
 
+    def get_signed_url_to_key(self, key, extra_params={}):
+        '''Generates a pre-signed URL giving access to an S3 object.
+
+        If a download_proxy is configured, then the URL will be
+        generated using the true S3 host, and then the hostname will be
+        rewritten afterward. Note that the Host header is part of a
+        version 4 signature, so the resulting request, as it stands,
+        will fail signature verification; the download_proxy server must
+        be configured to set the Host header back to the true value when
+        forwarding the request (CloudFront does this automatically).
+        '''
+        client = self.get_s3_client()
+        # check whether the object exists in S3
+        client.head_object(Bucket=self.bucket_name, Key=key)
+
+        params = {'Bucket': self.bucket_name,
+                  'Key': key
+                  }
+
+        params.update(extra_params)
+
+        url = client.generate_presigned_url(ClientMethod='get_object',
+                                            Params=params,
+                                            ExpiresIn=self.signed_url_expiry)
+        if self.download_proxy:
+            url = URL_HOST.sub(self.download_proxy + '/', url, 1)
+
+        return url
+
 
 class S3Uploader(BaseS3Uploader):
-
     '''
     An uploader class to replace local file storage with Amazon Web Services
     S3 for general files (e.g. Group cover images).
@@ -166,7 +210,8 @@ class S3Uploader(BaseS3Uploader):
         return os.path.join(path, 'storage', 'uploads', upload_to)
 
     def update_data_dict(self, data_dict, url_field, file_field, clear_field):
-        '''Manipulate data from the data_dict. This needs to be called before it
+        '''Manipulate data from the data_dict. This needs
+        to be called before it
         reaches any validators.
 
         `url_field` is the name of the field where the upload is going to be.
@@ -211,17 +256,26 @@ class S3Uploader(BaseS3Uploader):
         # If a filename has been provided (a file is being uploaded) write the
         # file to the appropriate key in the AWS bucket.
         if self.filename:
-            self.upload_to_key(self.filepath, self.upload_file,
-                               make_public=True)
+            self.upload_to_key(self.filepath, self.upload_file)
             self.clear = True
 
         if (self.clear and self.old_filename
                 and not self.old_filename.startswith('http')):
             self.clear_key(self.old_filepath)
 
+    def delete(self, filename):
+        ''' Delete file we are pointing at'''
+        filename = munge.munge_filename_legacy(filename)
+        key_path = os.path.join(self.storage_path, filename)
+        try:
+            self.clear_key(key_path)
+        except ClientError:
+            log.warning('Key {0} not found in bucket {1} for delete'
+                        .format(key_path, self.bucket_name))
+            pass
+
 
 class S3ResourceUploader(BaseS3Uploader):
-
     '''
     An uploader class to replace local file storage with Amazon Web Services
     S3 for resource files.
@@ -245,20 +299,50 @@ class S3ResourceUploader(BaseS3Uploader):
         upload_field_storage = resource.pop('upload', None)
         self.clear = resource.pop('clear_upload', None)
 
-        if isinstance(upload_field_storage, ALLOWED_UPLOAD_TYPES):
+        mime = magic.Magic(mime=True)
+
+        if bool(upload_field_storage) and \
+                isinstance(upload_field_storage, ALLOWED_UPLOAD_TYPES):
+            self.filesize = 0  # bytes
             self.filename = upload_field_storage.filename
             self.filename = munge.munge_filename(self.filename)
             resource['url'] = self.filename
             resource['url_type'] = 'upload'
             resource['last_modified'] = datetime.datetime.utcnow()
+
+            # Check the resource format from its filename extension,
+            # if no extension use the default CKAN implementation
+            resource_format = os.path.splitext(self.filename)[1][1:]
+            if resource_format:
+                resource['format'] = resource_format
+
+            self.upload_file = _get_underlying_file(upload_field_storage)
+            self.upload_file.seek(0, os.SEEK_END)
+            self.filesize = self.upload_file.tell()
+            # go back to the beginning of the file buffer
+            self.upload_file.seek(0, os.SEEK_SET)
+
             self.mimetype = resource.get('mimetype')
             if not self.mimetype:
                 try:
-                    self.mimetype = resource['mimetype'] = mimetypes.guess_type(self.filename, strict=False)[0]
+                    # Pass 2048 bytes to ensure MS Office file types e.g: XLSX
+                    # are not classified as application/zip
+                    self.mimetype = \
+                        resource['mimetype'] = \
+                        mime.from_buffer(self.upload_file.read(2048))
+
+                    # additional check on text/plain mimetypes for
+                    # more reliable result, if None continue with text/plain
+                    if self.mimetype == 'text/plain':
+                        self.mimetype = resource['mimetype'] = \
+                            mimetypes.guess_type(
+                                self.filename,
+                                strict=False)[0] or 'text/plain'
+                    # go back to the beginning of the file buffer
+                    self.upload_file.seek(0, os.SEEK_SET)
+
                 except Exception:
                     pass
-            if not self.mimetype: self.mimetype = ''
-            self.upload_file = _get_underlying_file(upload_field_storage)
         elif self.clear and resource.get('id'):
             # New, not yet created resources can be marked for deletion if the
             # users cancels an upload and enters a URL instead.
@@ -271,7 +355,7 @@ class S3ResourceUploader(BaseS3Uploader):
         '''Return the key used for this resource in S3.
 
         Keys are in the form:
-        <ckanext.s3filestore.aws_storage_path>/resources/<resource id>/<filename>
+        <ckanext.s3filestore.aws_storage_path>/resources/<resourceid>/<filename>
 
         e.g.:
         my_storage_path/resources/165900ba-3c60-43c5-9e9c-9f8acd0aa93f/data.csv
@@ -297,3 +381,17 @@ class S3ResourceUploader(BaseS3Uploader):
         if self.clear and self.old_filename:
             filepath = self.get_path(id, self.old_filename)
             self.clear_key(filepath)
+
+    def delete(self, id, filename=None):
+        ''' Delete file we are pointing at'''
+
+        if filename is None:
+            filename = os.path.basename(self.url)
+        filename = munge.munge_filename(filename)
+        key_path = self.get_path(id, filename)
+        try:
+            self.clear_key(key_path)
+        except ClientError:
+            log.warning('Key {0} not found in bucket {1} for delete'
+                        .format(key_path, self.bucket_name))
+            pass
