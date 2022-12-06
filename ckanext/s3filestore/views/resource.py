@@ -73,7 +73,8 @@ def resource_download(package_type, id, resource_id, filename=None):
                     'ResponseContentDisposition':
                         'attachment; filename=' + filename,
                 }
-                url = upload.get_signed_url_to_key(key_path, params)
+                url = upload.get_signed_url_to_key(
+                    key_path, params, read_only=True)
             return redirect(url)
 
         except ClientError as ex:

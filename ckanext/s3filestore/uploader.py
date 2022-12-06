@@ -48,6 +48,10 @@ class BaseS3Uploader(object):
         self.bucket_name = config.get('ckanext.s3filestore.aws_bucket_name')
         self.p_key = config.get('ckanext.s3filestore.aws_access_key_id')
         self.s_key = config.get('ckanext.s3filestore.aws_secret_access_key')
+        self.p_key_readonly = config.get(
+            'ckanext.s3filestore.aws_access_key_id_readonly')
+        self.s_key_readonly = config.get(
+            'ckanext.s3filestore.aws_secret_access_key_readonly')
         self.region = config.get('ckanext.s3filestore.region_name')
         self.signature = config.get('ckanext.s3filestore.signature_version')
         self.host_name = config.get('ckanext.s3filestore.host_name', None)
@@ -57,13 +61,18 @@ class BaseS3Uploader(object):
         self.addressing_style = \
             config.get('ckanext.s3filestore.addressing_style', 'auto')
         self.signed_url_expiry = \
-            int(config.get('ckanext.s3filestore.signed_url_expiry', '3600'))
+            int(config.get('ckanext.s3filestore.signed_url_expiry', '60')) 
+            # Keep the default url expiry as 60 so that same URL cannot be reused
 
     def get_directory(self, id, storage_path):
         directory = os.path.join(storage_path, id)
         return directory
 
-    def get_s3_session(self):
+    def get_s3_session(self, read_only=False):
+        if read_only:
+            return boto3.session.Session(aws_access_key_id=self.p_key_readonly,
+                                         aws_secret_access_key=self.s_key_readonly,
+                                         region_name=self.region)
         return boto3.session.Session(aws_access_key_id=self.p_key,
                                      aws_secret_access_key=self.s_key,
                                      region_name=self.region)
@@ -77,9 +86,9 @@ class BaseS3Uploader(object):
                               signature_version=self.signature,
                               s3={'addressing_style': self.addressing_style}))
 
-    def get_s3_client(self):
+    def get_s3_client(self, read_only=False):
         return \
-            self.get_s3_session()\
+            self.get_s3_session(read_only)\
                 .client('s3',
                         endpoint_url=self.host_name,
                         config=BotoConfig(
@@ -149,7 +158,7 @@ class BaseS3Uploader(object):
         except Exception as e:
             log.error('Something went very very wrong for {0}'.format(str(e)))
 
-    def get_signed_url_to_key(self, key, extra_params={}):
+    def get_signed_url_to_key(self, key, extra_params={}, read_only=False):
         '''Generates a pre-signed URL giving access to an S3 object.
 
         If a download_proxy is configured, then the URL will be
@@ -160,7 +169,11 @@ class BaseS3Uploader(object):
         be configured to set the Host header back to the true value when
         forwarding the request (CloudFront does this automatically).
         '''
-        client = self.get_s3_client()
+        if read_only:
+            # Use Read Only Key provided so that download can't alter file
+            client = self.get_s3_client(read_only=True)
+        else:
+            client = self.get_s3_client()
         # check whether the object exists in S3
         client.head_object(Bucket=self.bucket_name, Key=key)
 
@@ -396,3 +409,18 @@ class S3ResourceUploader(BaseS3Uploader):
             log.warning('Key {0} not found in bucket {1} for delete'
                         .format(key_path, self.bucket_name))
             pass
+
+
+def delete_from_bucket(data_dict):
+    filename = os.path.basename(data_dict.get('url'))
+    filename = munge.munge_filename(filename)
+    _id = data_dict.get('id')
+    key_path = S3ResourceUploader(data_dict).get_path(_id, filename)
+    try:
+        S3ResourceUploader(data_dict).clear_key(key_path)
+    except ClientError:
+        log.warning('Key {0} not found in bucket {1} for delete'
+                    .format(key_path, S3ResourceUploader().bucket_name))
+        pass
+    except Exception:
+        pass

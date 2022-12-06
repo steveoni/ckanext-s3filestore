@@ -13,6 +13,7 @@ class S3FileStorePlugin(plugins.SingletonPlugin):
     plugins.implements(plugins.IUploader)
     plugins.implements(plugins.IBlueprint)
     plugins.implements(plugins.IClick)
+    plugins.implements(plugins.IResourceController)
 
     # IConfigurer
 
@@ -72,3 +73,27 @@ class S3FileStorePlugin(plugins.SingletonPlugin):
 
     def get_commands(self):
         return [upload_resources]
+
+    # IResourceController
+
+    def before_create(self, context, resource_dict):
+        '''Required by IResourceController'''
+        pass
+
+    def before_show(self, resource_dict):
+        '''Required by IResourceController'''
+        pass
+
+    def after_create(self, context, resource_dict):
+        '''Required by IResourceController'''
+        pass
+
+    def after_delete(self, context, resource_dict):
+        '''Required by IResourceController'''
+        pass
+
+    def before_delete(self, context, resource, resources):
+        # Delete the resource from the storage
+        for rs in resources:
+            if rs.get('id') == resource.get('id'):
+                ckanext.s3filestore.uploader.delete_from_bucket(rs)
