@@ -104,7 +104,9 @@ class BaseS3Uploader(object):
 
         bucket = s3.Bucket(bucket_name)
         try:
-            s3.meta.client.head_bucket(Bucket=bucket_name)
+            # Validate the bucket when key doesn't have list bucket permission
+            # By Putting the data into the bucket
+            s3.meta.client.put_object(Bucket=bucket_name,Body='exist',Key='exist.txt')
             log.debug('Bucket {0} found!'.format(bucket_name))
         except botocore.exceptions.ClientError as e:
             error_code = int(e.response['Error']['Code'])
