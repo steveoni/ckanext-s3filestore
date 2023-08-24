@@ -92,6 +92,14 @@ class S3FileStorePlugin(plugins.SingletonPlugin):
         '''Required by IResourceController'''
         pass
 
+    def before_resource_update(self, context, current, resource_dict):
+        '''Required by IResourceController'''
+        pass
+
+    def after_resource_update(self, context, resource_dict):
+        '''Required by IResourceController'''
+        pass
+
     def before_delete(self, context, resource, resources):
         # Delete the resource from the storage
         for rs in resources:
