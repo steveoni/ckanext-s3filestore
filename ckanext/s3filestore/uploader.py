@@ -139,6 +139,7 @@ class BaseS3Uploader(object):
         s3 = self.get_s3_resource()
 
         try:
+            log.info("Code was in here2")
             s3.Object(self.bucket_name, filepath).put(
                 Body=upload_file.read(),
                 ACL='public-read' if make_public else self.acl,
@@ -384,6 +385,7 @@ class S3ResourceUploader(BaseS3Uploader):
         # If a filename has been provided (a file is being uploaded) write the
         # file to the appropriate key in the AWS bucket.
         if self.filename:
+            log.info("Code was in here")
             filepath = self.get_path(id, self.filename)
             self.upload_to_key(filepath, self.upload_file)
 
