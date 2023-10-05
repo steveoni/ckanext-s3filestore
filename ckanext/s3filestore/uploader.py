@@ -305,7 +305,7 @@ class S3ResourceUploader(BaseS3Uploader):
         '''
 
         super(S3ResourceUploader, self).__init__()
-
+        log.info("S3 IS actually called")
         path = config.get('ckanext.s3filestore.aws_storage_path', '')
         self.storage_path = os.path.join(path, 'resources')
         self.filename = None
@@ -330,11 +330,13 @@ class S3ResourceUploader(BaseS3Uploader):
             resource_format = os.path.splitext(self.filename)[1][1:]
             if resource_format:
                 resource['format'] = resource_format
-
+            log.info("Get here")
             self.upload_file = _get_underlying_file(upload_field_storage)
             self.upload_file.seek(0, os.SEEK_END)
             self.filesize = self.upload_file.tell()
+            log.info("DIDN'T GET STUCKED HERE")
             # go back to the beginning of the file buffer
+            
             self.upload_file.seek(0, os.SEEK_SET)
 
             self.mimetype = resource.get('mimetype')
