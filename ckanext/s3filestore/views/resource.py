@@ -79,6 +79,28 @@ def resource_download(package_type, id, resource_id, filename=None):
 
         except ClientError as ex:
             if ex.response['Error']['Code'] in ['NoSuchKey', '404']:
+
+                s3 = upload.get_s3_client(read_only=True)
+                prefix = f"resources/{rsc['id']}" 
+                objects = s3.list_objects_v2(Bucket=upload.bucket_name, Prefix=prefix)
+
+                if 'Contents' in objects:
+                    from difflib import get_close_matches
+
+                    keys = [obj['Key'] for obj in objects['Contents']]
+                    normalized_keys = [os.path.basename(k) for k in keys]
+
+                    match = get_close_matches(filename, normalized_keys, n=1)
+                    if match:
+                        fallback_filename = match[0]
+                        fallback_key = f"{prefix}/{fallback_filename}"
+                        if preview:
+                            url = upload.get_signed_url_to_key(fallback_key)
+                        else:
+                            url = upload.get_signed_url_to_key(
+                                fallback_key, params, read_only=True)
+                        return redirect(url)
+                    
                 # attempt fallback
                 if ckan_config.get(
                         'ckanext.s3filestore.filesystem_download_fallback',
