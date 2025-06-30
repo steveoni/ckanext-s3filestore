@@ -85,7 +85,8 @@ def resource_download(package_type, id, resource_id, filename=None):
             if error_code in ['NoSuchKey', '404'] or http_status == 404:
 
                 s3 = upload.get_s3_client(read_only=True)
-                prefix = f"resources/{rsc['id']}" 
+                prefix = upload.get_path(rsc['id'], '')
+                log.error(f"Attempting to access prefix: {prefix}")
                 objects = s3.list_objects_v2(Bucket=upload.bucket_name, Prefix=prefix)
                 log.error("=====s3filestore=======")
                 if 'Contents' in objects:
