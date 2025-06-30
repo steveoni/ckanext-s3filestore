@@ -79,6 +79,7 @@ def resource_download(package_type, id, resource_id, filename=None):
 
         except ClientError as ex:
             log.error(f"====Error====== \n{ex}\n=============")
+            log.error(f"===response=== \n{ex.response}\n=============")
             if ex.response['Error']['Code'] in ['NoSuchKey', '404']:
 
                 s3 = upload.get_s3_client(read_only=True)
