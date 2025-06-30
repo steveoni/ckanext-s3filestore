@@ -78,12 +78,13 @@ def resource_download(package_type, id, resource_id, filename=None):
             return redirect(url)
 
         except ClientError as ex:
+            log.error(f"====Error====== \n{ex}\n=============")
             if ex.response['Error']['Code'] in ['NoSuchKey', '404']:
 
                 s3 = upload.get_s3_client(read_only=True)
                 prefix = f"resources/{rsc['id']}" 
                 objects = s3.list_objects_v2(Bucket=upload.bucket_name, Prefix=prefix)
-
+                log.error("=====s3filestore=======")
                 if 'Contents' in objects:
                     from difflib import get_close_matches
 
