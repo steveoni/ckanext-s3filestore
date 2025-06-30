@@ -78,24 +78,18 @@ def resource_download(package_type, id, resource_id, filename=None):
             return redirect(url)
 
         except ClientError as ex:
-            log.error(f"====Error====== \n{ex}\n=============")
-            log.error(f"===response=== \n{ex.response}\n=============")
             error_code = ex.response.get('Error', {}).get('Code', '')
             http_status = ex.response.get('ResponseMetadata', {}).get('HTTPStatusCode', '')
             if error_code in ['NoSuchKey', '404'] or http_status == 404:
 
                 s3 = upload.get_s3_client(read_only=True)
                 prefix = upload.get_path(rsc['id'], '')
-                log.error(f"Attempting to access prefix: {prefix}")
                 objects = s3.list_objects_v2(Bucket=upload.bucket_name, Prefix=prefix)
-                log.error("=====s3filestore=======")
                 if 'Contents' in objects:
                     from difflib import get_close_matches
 
                     keys = [obj['Key'] for obj in objects['Contents']]
                     normalized_keys = [os.path.basename(k) for k in keys]
-                    log.error(f"============\n {keys} \n============\n")
-                    log.error(f"===============\n {normalized_keys} \n================\n {filename}" )
                     match = get_close_matches(filename, normalized_keys, n=1)
                     if match:
                         fallback_filename = match[0]
@@ -106,7 +100,6 @@ def resource_download(package_type, id, resource_id, filename=None):
                         else:
                             url = upload.get_signed_url_to_key(
                                 fallback_key, params, read_only=True)
-                        log.error(f"Redirecting to fallback URL: {url}")
                         return redirect(url)
                     
                 # attempt fallback
