@@ -89,16 +89,19 @@ def resource_download(package_type, id, resource_id, filename=None):
 
                     keys = [obj['Key'] for obj in objects['Contents']]
                     normalized_keys = [os.path.basename(k) for k in keys]
-
+                    log.error(f"============\n {keys} \n============\n")
+                    log.error(f"===============\n {normalized_keys} \n================\n {filename}" )
                     match = get_close_matches(filename, normalized_keys, n=1)
                     if match:
                         fallback_filename = match[0]
                         fallback_key = f"{prefix}/{fallback_filename}"
+                        log.error(f"Using fallback key: {fallback_key} for resource {resource_id}")
                         if preview:
                             url = upload.get_signed_url_to_key(fallback_key)
                         else:
                             url = upload.get_signed_url_to_key(
                                 fallback_key, params, read_only=True)
+                        log.error(f"Redirecting to fallback URL: {url}")
                         return redirect(url)
                     
                 # attempt fallback
